@@ -1,0 +1,40 @@
+spring:
+  application:
+    name: ai-be-to-fe-spring-boot-starter
+
+  # ── Spring AI ──────────────────────────────────────────────────────────────
+  ai:
+    openai:
+      # Set via environment variable:  SPRING_AI_OPENAI_API_KEY=sk-...
+      api-key: ${SPRING_AI_OPENAI_API_KEY:}
+      chat:
+        options:
+          model: ${OPENAI_MODEL:gpt-4o}
+          temperature: 0.2   # Lower = more deterministic / structured output
+
+# ── AI BE-to-FE Starter ───────────────────────────────────────────────────────
+ai:
+  fe-generator:
+    enabled: true
+
+    # GitHub personal-access token with:  repo (read/write), pull_requests (write)
+    github-token: ${AI_FE_GENERATOR_GITHUB_TOKEN:}
+
+    # Must match the "Secret" field configured in the GitHub webhook settings
+    webhook-secret: ${AI_FE_GENERATOR_WEBHOOK_SECRET:}
+
+    # ── Backend repository ──────────────────────────────────────────────────
+    backend-repo-name: ${AI_FE_GENERATOR_BACKEND_REPO:my-org/my-backend}
+    backend-default-branch: ${AI_FE_GENERATOR_BACKEND_BRANCH:main}
+
+    # ── Frontend repository ─────────────────────────────────────────────────
+    frontend-repo-name: ${AI_FE_GENERATOR_FRONTEND_REPO:my-org/my-react-app}
+    frontend-source-path: ${AI_FE_GENERATOR_FRONTEND_PATH:src/api}
+
+    # ── AI prompt override (optional) ───────────────────────────────────────
+    # Uncomment and customise to match your frontend stack exactly.
+    # ai-system-prompt: |
+    #   You are an expert React TypeScript developer.
+    #   Use RTK Query createApi / fetchBaseQuery for data fetching.
+    #   Use Zod for runtime validation.
+    #   …
