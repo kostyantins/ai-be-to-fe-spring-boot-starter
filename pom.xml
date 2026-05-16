@@ -23,7 +23,7 @@
 	<properties>
 		<java.version>21</java.version>
 		<spring-ai.version>1.1.6</spring-ai.version>
-		<github-api.version>1.326</github-api.version>
+		<github-api.version>1.330</github-api.version>
 	</properties>
 	<dependencies>
 		<!-- Starter essentials -->
