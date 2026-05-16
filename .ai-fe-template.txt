@@ -1,0 +1,22 @@
+Frontend project conventions
+────────────────────────────
+Framework   : React 18 with TypeScript (strict mode)
+Data layer  : RTK Query (Redux Toolkit) — createApi / fetchBaseQuery
+HTTP client : built-in RTK Query fetchBaseQuery (NOT Axios)
+Validation  : Zod schemas for all API response types
+File naming : kebab-case for files, PascalCase for components & interfaces
+API base URL: use the constant BASE_URL from src/api/config.ts
+
+Directory layout:
+  src/api/
+    config.ts          ← shared API config (BASE_URL, etc.)
+    types/             ← TypeScript interfaces / Zod schemas
+    services/          ← RTK Query createApi slices
+    hooks/             ← re-exported generated hooks (if split from slice)
+
+Conventions:
+  - Each createApi slice file is named <resource>.api.ts (e.g. user.api.ts)
+  - Each type file is named <resource>.types.ts (e.g. user.types.ts)
+  - All interfaces must be exported
+  - Do NOT import from node_modules directly in type files
+  - Prefer interface over type alias for object shapes

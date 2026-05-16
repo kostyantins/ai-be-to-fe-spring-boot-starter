@@ -360,7 +360,12 @@ ngrok http 8080
 # Forwarding: https://abc123.ngrok.io -> http://localhost:8080
 ```
 
-**Register the webhook on the backend repository:**
+> 💡 **Tip:** Generate a strong secret with:
+> ```bash
+> openssl rand -hex 32
+> ```
+
+**Option A — Manual (static domain / ngrok)**
 
 1. Go to your **backend** GitHub repository
 2. Navigate to **Settings → Webhooks → Add webhook**
@@ -377,10 +382,58 @@ ngrok http 8080
 4. Click **Add webhook**
 5. GitHub will send a `ping` event — you should see `HTTP 202` in the webhook delivery log.
 
-> 💡 **Tip:** Generate a strong secret with:
-> ```bash
-> openssl rand -hex 32
-> ```
+---
+
+**Option B — Automatic via GitHub Actions (dynamic IP / port forwarding)**
+
+If your server has a dynamic IP (e.g. a home Raspberry Pi with manual port forwarding),
+skip the manual step entirely. Instead, let your deploy workflow keep the webhook URL
+in sync automatically on every deploy.
+
+Add these **GitHub Actions secrets** to your backend repository:
+
+| Secret | Value |
+|--------|-------|
+| `PI_HOST` | Current public IP of your server (update before each deploy) |
+| `PI_PORT` | Forwarded port (e.g. `8083`) |
+| `AI_FE_GENERATOR_WEBHOOK_SECRET` | The random secret generated above |
+| `GH_ADMIN_TOKEN` | Classic PAT with **`admin:repo_hook`** scope — lets the workflow call the Webhooks API |
+
+Then add this step **at the end** of your deploy workflow job:
+
+```yaml
+- name: Update webhook URL to http://${{ secrets.PI_HOST }}:${{ secrets.PI_PORT }}/github/webhook
+  env:
+    GH_TOKEN: ${{ secrets.GH_ADMIN_TOKEN }}
+    REPO: ${{ github.repository }}
+    NEW_URL: "http://${{ secrets.PI_HOST }}:${{ secrets.PI_PORT }}/github/webhook"
+    WEBHOOK_SECRET: ${{ secrets.AI_FE_GENERATOR_WEBHOOK_SECRET }}
+  run: |
+    HOOK_ID=$(gh api "repos/$REPO/hooks" \
+      --jq '.[] | select(.config.url | contains("/github/webhook")) | .id' 2>/dev/null || true)
+
+    if [ -n "$HOOK_ID" ]; then
+      gh api --method PATCH "repos/$REPO/hooks/$HOOK_ID" \
+        --field "config[url]=$NEW_URL" \
+        --field "config[content_type]=json"
+      echo "✅ Webhook updated: $NEW_URL"
+    else
+      gh api --method POST "repos/$REPO/hooks" \
+        --field "name=web" --field "active=true" \
+        --field "events[]=push" --field "events[]=pull_request" \
+        --field "config[url]=$NEW_URL" \
+        --field "config[content_type]=json" \
+        --field "config[secret]=$WEBHOOK_SECRET"
+      echo "✅ Webhook created: $NEW_URL"
+    fi
+```
+
+On the **first deploy** the step creates the webhook. On every subsequent deploy it updates
+the URL to the new IP/port. You never touch the webhook settings page again.
+
+> **Security note:** Even without HTTPS, every payload is protected by HMAC-SHA256 signature
+> verification using `AI_FE_GENERATOR_WEBHOOK_SECRET`. The starter rejects any request
+> whose `X-Hub-Signature-256` header doesn't match — so fake payloads are impossible.
 
 ---
 
@@ -388,7 +441,31 @@ ngrok http 8080
 
 1. Go to [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
 2. Create a new secret key
-3. Set it as `SPRING_AI_OPENAI_API_KEY` in your `.env` / environment
+3. Set the key in your environment — **choose one approach:**
+
+**Option A — Spring AI default name (no `application.yml` change needed)**
+
+```bash
+# Spring Boot maps this automatically to spring.ai.openai.api-key
+SPRING_AI_OPENAI_API_KEY=sk-...
+```
+
+**Option B — Custom shorter name (if you explicitly map it in `application.yml`)**
+
+```yaml
+# application.yml
+spring:
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:}   # <-- your custom env var name
+```
+```bash
+# .env
+OPENAI_API_KEY=sk-...
+```
+
+Both options set the same underlying property (`spring.ai.openai.api-key`).
+Pick Option A for zero config, Option B if you prefer a shorter env var name.
 
 The starter uses **GPT-4o** by default (`temperature: 0.2` for deterministic output).
 You can change the model via the `OPENAI_MODEL` environment variable — any model supported
@@ -451,11 +528,11 @@ Content-Type: application/json
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `commitSha` | `string` | at least one | SHA of a backend commit to base generation on |
-| `prompt` | `string` | at least one | Free-text instructions or natural-language description |
+| `commitSha` | `string` | **optional** | SHA of a backend commit to base generation on |
+| `prompt` | `string` | **optional** | Free-text instructions or natural-language description |
 
-Both fields can be provided at the same time — the diff supplies structural context while
-the prompt adds extra instructions on top.
+> ⚠️ **At least one** of the two fields must be non-blank. Sending both empty returns HTTP 400.
+> Providing both at the same time is valid — the diff supplies structural context while the prompt adds extra instructions.
 
 ### Usage scenarios
 

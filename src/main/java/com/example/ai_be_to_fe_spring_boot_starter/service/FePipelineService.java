@@ -6,6 +6,7 @@ import com.example.ai_be_to_fe_spring_boot_starter.model.OnDemandGenerationRespo
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.kohsuke.github.GHPullRequest;
+import org.springframework.util.StopWatch;
 
 import java.io.IOException;
 import java.util.stream.Collectors;
@@ -45,31 +46,43 @@ public class FePipelineService {
         boolean hasCommit = commitSha != null && !commitSha.isBlank();
         boolean hasPrompt = userPrompt != null && !userPrompt.isBlank();
 
+        StopWatch sw = new StopWatch("fe-pipeline");
+        log.info("╔══ FE Pipeline START  commitSha={}  hasPrompt={} ══╗",
+                hasCommit ? commitSha.substring(0, Math.min(8, commitSha.length())) : "—", hasPrompt);
+
         // ── 1. Fetch diff (when a commit SHA is supplied) ─────────────────────
         String diff = null;
         if (hasCommit) {
+            sw.start("fetch-diff");
             diff = gitHubIntegrationService.fetchCommitDiff(commitSha);
-            log.debug("Fetched BE diff for commit {} ({} chars)", commitSha, diff.length());
+            sw.stop();
+            log.info("  [1/6] Diff fetched  chars={}  elapsed={}ms",
+                    diff.length(), sw.lastTaskInfo().getTimeMillis());
         }
 
         // ── 2. Load optional .ai-fe-template.txt ─────────────────────────────
         String feTemplate = gitHubIntegrationService.fetchFETemplate().orElse(null);
         if (feTemplate != null) {
-            log.debug("Loaded .ai-fe-template.txt ({} chars)", feTemplate.length());
+            log.info("  [2/6] .ai-fe-template.txt loaded  chars={}", feTemplate.length());
+        } else {
+            log.info("  [2/6] .ai-fe-template.txt not found – using default prompt");
         }
 
         // ── 3. Call the AI ────────────────────────────────────────────────────
-        log.info("▶ Calling AI  commitSha={} hasPrompt={}", hasCommit ? commitSha : "—", hasPrompt);
+        log.info("  [3/6] Calling AI model…");
+        sw.start("ai-call");
         AiFrontendResponse aiResponse = aiCodeGeneratorService.generateFrontendCode(diff, userPrompt, feTemplate);
+        sw.stop();
+        log.info("  [3/6] AI responded  elapsed={}ms", sw.lastTaskInfo().getTimeMillis());
 
         // ── 4. No-changes guard ───────────────────────────────────────────────
         if (aiResponse == null || aiResponse.files() == null || aiResponse.files().isEmpty()) {
             String summary = aiResponse != null ? aiResponse.summary() : "AI returned no response.";
-            log.info("✔ No FE changes required. Summary: {}", summary);
+            log.info("╚══ FE Pipeline END  status=NO_CHANGES  summary='{}' ══╝", summary);
             return OnDemandGenerationResponse.noChanges(summary);
         }
 
-        log.info("AI generated {} file operation(s): {}",
+        log.info("  [4/6] AI generated {} file operation(s): {}",
                 aiResponse.files().size(),
                 aiResponse.files().stream()
                         .map(f -> f.operation() + " " + f.path())
@@ -78,27 +91,38 @@ public class FePipelineService {
         // ── 5. Determine branch name ──────────────────────────────────────────
         String branchSuffix = hasCommit
                 ? commitSha.substring(0, Math.min(8, commitSha.length()))
-                : String.valueOf(System.currentTimeMillis()).substring(5); // last 8 digits of millis
+                : String.valueOf(System.currentTimeMillis()).substring(5);
 
         String branchName = hasCommit
                 ? "ai/fe-sync-" + branchSuffix
                 : "ai/fe-on-demand-" + branchSuffix;
 
         // ── 6. Create branch ──────────────────────────────────────────────────
+        sw.start("create-branch");
         gitHubIntegrationService.createBranch(branchName);
+        sw.stop();
+        log.info("  [5/6] Branch '{}' created  elapsed={}ms", branchName, sw.lastTaskInfo().getTimeMillis());
 
         // ── 7. Commit files ───────────────────────────────────────────────────
+        sw.start("commit-files");
         gitHubIntegrationService.commitFiles(branchName, aiResponse.files());
+        sw.stop();
+        log.info("  [5/6] Files committed  elapsed={}ms", sw.lastTaskInfo().getTimeMillis());
 
         // ── 8. Open Pull Request ──────────────────────────────────────────────
         String prTitle = hasCommit
                 ? "AI FE Sync – " + branchSuffix
                 : "AI FE Generation – " + branchSuffix;
 
+        sw.start("create-pr");
         String prBody = buildPrBody(aiResponse, commitSha, userPrompt);
         GHPullRequest pr = gitHubIntegrationService.createPullRequest(branchName, prTitle, prBody);
+        sw.stop();
 
-        log.info("✔ Pipeline complete. PR: {}", pr.getHtmlUrl());
+        long totalMs = sw.getTotalTimeMillis();
+        log.info("╚══ FE Pipeline END  status=SUCCESS  files={}  totalTime={}ms ══╝", aiResponse.files().size(), totalMs);
+        log.info("    PR: {}", pr.getHtmlUrl());
+
         return OnDemandGenerationResponse.success(pr.getHtmlUrl().toString(), branchName, aiResponse);
     }
 

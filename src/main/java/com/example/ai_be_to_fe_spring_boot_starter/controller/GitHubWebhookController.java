@@ -62,7 +62,7 @@ public class GitHubWebhookController {
                     .body("Invalid signature");
         }
 
-        log.debug("Received GitHub event '{}' (signature OK)", eventType);
+        log.info("✔ Webhook signature verified – event='{}' processing...", eventType);
 
         // ── 2. Event routing ─────────────────────────────────────────────────
         try {
@@ -153,6 +153,3 @@ public class GitHubWebhookController {
         }
     }
 }
-
-
-
