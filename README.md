@@ -15,6 +15,7 @@
 3. [Project Structure](#3-project-structure)  
 4. [Quick Start](#4-quick-start)  
 5. [Step-by-Step Setup Guide](#5-step-by-step-setup-guide)  
+   - 5.0 [Publish the Starter to GitHub Packages](#50-publish-the-starter-to-github-packages)  
    - 5.1 [Add the Dependency](#51-add-the-dependency)  
    - 5.2 [Create a GitHub Personal Access Token](#52-create-a-github-personal-access-token)  
    - 5.3 [Configure Environment Variables](#53-configure-environment-variables)  
@@ -228,13 +229,52 @@ cp .env.example .env
 
 ## 5. Step-by-Step Setup Guide
 
+### 5.0 Publish the Starter to GitHub Packages
+
+The starter is **not on Maven Central** — it is distributed via
+[GitHub Packages](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-apache-maven-registry).
+You must publish it once before any consumer project can resolve it remotely
+(CI runners, Docker builds, team members).
+
+#### One-time bootstrap — push the starter first
+
+```bash
+cd ai-be-to-fe-spring-boot-starter
+git add .
+git commit -m "feat: initial release"
+git push origin master
+```
+
+This triggers the **"Publish to GitHub Packages"** GitHub Actions workflow
+(`.github/workflows/publish.yml`) which runs `mvn deploy` and uploads the JAR to:
+
+```
+https://maven.pkg.github.com/kostyantins/ai-be-to-fe-spring-boot-starter
+```
+
+> ✅ **Wait for the green tick** on the workflow before pushing the consumer project.
+> Every subsequent push to `master` automatically re-publishes the latest snapshot.
+
+You can verify the package was published at:
+**https://github.com/kostyantins/ai-be-to-fe-spring-boot-starter/packages**
+
+---
+
 ### 5.1 Add the Dependency
 
-Add the starter to the project that will **host the webhook** (this can be a dedicated
-micro-service or your existing backend application).
+Add the starter **and** the GitHub Packages repository to the consumer project's `pom.xml`.
 
 **Maven:**
 ```xml
+<!-- 1. Declare the repository where the starter JAR lives -->
+<repositories>
+    <repository>
+        <id>github-ai-starter</id>
+        <url>https://maven.pkg.github.com/kostyantins/ai-be-to-fe-spring-boot-starter</url>
+    </repository>
+</repositories>
+
+<!-- 2. Add the dependency -->
 <dependency>
     <groupId>com.example</groupId>
     <artifactId>ai-be-to-fe-spring-boot-starter</artifactId>
@@ -242,10 +282,29 @@ micro-service or your existing backend application).
 </dependency>
 ```
 
-**Gradle (Kotlin DSL):**
-```kotlin
-implementation("com.example:ai-be-to-fe-spring-boot-starter:0.0.1-SNAPSHOT")
+**GitHub Packages requires authentication** — even for public packages.
+Add a `settings.xml` at the project root with your token:
+
+```xml
+<!-- settings.xml -->
+<settings>
+  <servers>
+    <server>
+      <id>github-ai-starter</id>
+      <username>${env.GITHUB_ACTOR}</username>
+      <password>${env.GITHUB_TOKEN}</password>
+    </server>
+  </servers>
+</settings>
 ```
+
+Then pass the token in every environment that builds the project:
+
+| Environment | How |
+|---|---|
+| **Local machine** | `export GITHUB_TOKEN=ghp_...` then `mvn ... -s settings.xml` |
+| **GitHub Actions (plain Maven build)** | Use `setup-java` with `server-id: github-ai-starter` + `server-password: ${{ secrets.GITHUB_TOKEN }}` |
+| **GitHub Actions (Docker build)** | Pass as a BuildKit secret: `secrets: github_token=${{ secrets.GITHUB_TOKEN }}` and use `--mount=type=secret` in Dockerfile |
 
 > The starter auto-configures itself. No `@EnableXxx` annotation is needed.
 
