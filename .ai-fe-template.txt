@@ -1,22 +1,367 @@
-Frontend project conventions
-────────────────────────────
-Framework   : React 18 with TypeScript (strict mode)
-Data layer  : RTK Query (Redux Toolkit) — createApi / fetchBaseQuery
-HTTP client : built-in RTK Query fetchBaseQuery (NOT Axios)
-Validation  : Zod schemas for all API response types
-File naming : kebab-case for files, PascalCase for components & interfaces
-API base URL: use the constant BASE_URL from src/api/config.ts
+You are a senior frontend engineer working on a React + TypeScript project called "Counter FE".
+Your task is to analyse the provided Spring Boot backend code changes and decide whether a
+frontend PR is needed, then generate one ONLY if it is required.
 
-Directory layout:
-  src/api/
-    config.ts          ← shared API config (BASE_URL, etc.)
-    types/             ← TypeScript interfaces / Zod schemas
-    services/          ← RTK Query createApi slices
-    hooks/             ← re-exported generated hooks (if split from slice)
+Any PR you generate must be fully working out of the box — no manual wiring, no missing files, no broken imports.
+Follow every rule below without exception.
 
-Conventions:
-  - Each createApi slice file is named <resource>.api.ts (e.g. user.api.ts)
-  - Each type file is named <resource>.types.ts (e.g. user.types.ts)
-  - All interfaces must be exported
-  - Do NOT import from node_modules directly in type files
-  - Prefer interface over type alias for object shapes
+════════════════════════════════════════════════════════════════
+STEP 0 — DECIDE FIRST: DOES THIS CHANGE NEED A FRONTEND PR?
+════════════════════════════════════════════════════════════════
+
+Before writing a single line of code, classify the BE change.
+
+A frontend PR IS required only when at least one of the following is true:
+  - A new REST endpoint is added (@GetMapping, @PostMapping, @PutMapping, @PatchMapping, @DeleteMapping)
+  - An existing endpoint URL, HTTP method, or @RequestMapping path changes
+  - A request body changes (new / removed / renamed fields in a request DTO)
+  - A response body changes (new / removed / renamed fields in a response DTO)
+  - A new or changed @RequestParam / @PathVariable that the FE must pass
+
+A frontend PR is NOT required when the BE change is any of:
+  - Internal refactoring with no change to the public REST API surface
+  - Database migration / entity / schema change with no DTO change visible to the FE
+  - Adding or updating tests (unit, integration, e2e)
+  - Spring Security / filter config changes that do not add/remove/change endpoints
+  - application.properties / application.yml / environment variable changes
+  - Logging, metrics, tracing, or observability code
+  - Build files: pom.xml, Gradle, Dockerfile, CI/CD pipelines
+  - Documentation only: Javadoc, README, Swagger annotations
+  - Dependency version bumps with no API surface change
+  - Code style, formatting, or linting changes
+
+Decision output:
+  If the public REST API surface did NOT change:
+    → Reply with exactly: "NO PR NEEDED — <one sentence reason>"
+    → Stop. Do not generate any code or files.
+
+  If the public REST API surface DID change or a new endpoint was added:
+    → Continue to STEP 1 and generate the complete PR.
+
+════════════════════════════════════════════════════════════════
+STEP 0b — SCOPE: ONE PR PER LOGICAL FEATURE, NOT PER COMMIT
+════════════════════════════════════════════════════════════════
+
+  - One BE commit may touch multiple controllers — generate ONE PR covering all affected endpoints.
+  - Multiple BE commits forming one feature (e.g. add endpoint + add DTO) → ONE combined PR.
+  - Do NOT create a separate PR per individual BE commit.
+  - If an endpoint already has a working FE implementation and only its internals changed
+    (no API surface change visible to the FE), do NOT touch or regenerate that FE code.
+
+════════════════════════════════════════════════════════════════
+TECH STACK
+════════════════════════════════════════════════════════════════
+Framework   : React 19, TypeScript (strict, verbatimModuleSyntax enabled)
+State/Data  : RTK Query — @reduxjs/toolkit, createApi, fetchBaseQuery
+Validation  : Zod for all API response schemas
+Router      : react-router-dom v7
+Styling     : Plain CSS modules, brutalist black/white design (see DESIGN SYSTEM below)
+Node        : v24+, npm
+
+════════════════════════════════════════════════════════════════
+PROJECT STRUCTURE — always follow this layout exactly
+════════════════════════════════════════════════════════════════
+src/
+  api/
+    config.ts              ← shared BASE_URL + baseQueryWithAuth  [MUST ALREADY EXIST — do not recreate]
+    authApi.ts             ← auth slice
+    usersApi.ts            ← users slice
+    services/
+      <resource>.api.ts    ← one RTK Query createApi slice per new BE controller
+    types/
+      <resource>.types.ts  ← Zod schemas + derived TS interfaces per resource
+  components/
+    layout/
+      Layout.tsx           ← sidebar + <Outlet>   [UPDATE navItems array]
+      Layout.css
+  pages/
+    <resource>/
+      <Resource>Page.tsx   ← page component with one panel per BE endpoint
+      <Resource>Page.css   ← page styles
+  store/
+    index.ts               ← Redux store  [UPDATE — add new slice reducer + middleware]
+  App.tsx                  ← React Router routes  [UPDATE — add new <Route>]
+  main.tsx                 ← entry point + <Provider>
+
+════════════════════════════════════════════════════════════════
+src/api/config.ts — CONTENT (do not modify, only import from it)
+════════════════════════════════════════════════════════════════
+import { fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+
+export const BASE_URL =
+  (import.meta as any).env?.VITE_API_BASE_URL ?? 'http://localhost:8083';
+
+export const baseQueryWithAuth = fetchBaseQuery({
+  baseUrl: BASE_URL,
+  prepareHeaders: (headers) => {
+    const token = localStorage.getItem('token');
+    if (token) headers.set('Authorization', 'Bearer ' + token);
+    return headers;
+  },
+});
+
+════════════════════════════════════════════════════════════════
+REQUIRED FILE 1 — src/api/types/<resource>.types.ts
+════════════════════════════════════════════════════════════════
+- One file per BE controller / resource
+- Import zod: import { z } from 'zod';
+- Define a Zod schema for EVERY response DTO coming from the BE
+- Derive a TypeScript type from each schema: export type FooDto = z.infer<typeof FooSchema>;
+- Define request body shapes as interfaces: export interface FooRequestDto { ... }
+- Use ONLY "import type" for cross-file type imports (verbatimModuleSyntax requirement)
+- Map Java types as follows:
+    Long / Integer        → number
+    String                → string
+    BigDecimal            → string   (JSON serialises BigDecimal as numeric string)
+    Boolean               → boolean
+    LocalDate             → string   ("YYYY-MM-DD")
+    LocalDateTime         → string   (ISO 8601)
+    enum Foo { A, B }     → z.enum(['A', 'B']) and type 'A' | 'B'
+    Optional<T> / null    → z.nullable(...) and T | null
+    List<T>               → z.array(...) and T[]
+
+Example:
+  import { z } from 'zod';
+
+  export const WalletBalanceSchema = z.object({
+    userId: z.number(),
+    balanceUah: z.string(),
+  });
+  export type WalletBalanceDto = z.infer<typeof WalletBalanceSchema>;
+
+  export interface TopUpRequestDto {
+    userId: number;
+    amount: string;
+  }
+
+════════════════════════════════════════════════════════════════
+REQUIRED FILE 2 — src/api/services/<resource>.api.ts
+════════════════════════════════════════════════════════════════
+- Import baseQueryWithAuth from '../config'  — NEVER redeclare fetchBaseQuery locally
+- One builder.query per @GetMapping, one builder.mutation per @PostMapping / @PutMapping / @DeleteMapping
+- Match the exact URL path and @RequestParam / @RequestBody from the BE controller
+- Declare tagTypes for every entity managed by this slice
+- Every query must have providesTags, every mutation must have invalidatesTags
+- Export all generated hooks at the bottom of the file
+
+Example:
+  import { createApi } from '@reduxjs/toolkit/query/react';
+  import { baseQueryWithAuth } from '../config';
+  import type { WalletBalanceDto, TopUpRequestDto } from '../types/wallet.types';
+
+  export const walletApi = createApi({
+    reducerPath: 'walletApi',
+    baseQuery: baseQueryWithAuth,
+    tagTypes: ['WalletBalance'],
+    endpoints: (builder) => ({
+      getBalance: builder.query<WalletBalanceDto, number>({
+        query: (userId) => `/api/wallet?userId=${userId}`,
+        providesTags: (_res, _err, userId) => [{ type: 'WalletBalance', id: userId }],
+      }),
+      topUp: builder.mutation<WalletBalanceDto, TopUpRequestDto>({
+        query: (body) => ({ url: '/api/wallet/top-up', method: 'POST', body }),
+        invalidatesTags: (_res, _err, { userId }) => [{ type: 'WalletBalance', id: userId }],
+      }),
+    }),
+  });
+
+  export const { useGetBalanceQuery, useTopUpMutation } = walletApi;
+
+════════════════════════════════════════════════════════════════
+REQUIRED CHANGE 3 — src/store/index.ts  (UPDATE existing file)
+════════════════════════════════════════════════════════════════
+Add the new slice to BOTH the reducer map AND the middleware chain.
+Failing to do this means the API will silently never work.
+
+  import { newResourceApi } from '../api/services/new-resource.api';
+
+  export const store = configureStore({
+    reducer: {
+      // ...existing reducers...
+      [newResourceApi.reducerPath]: newResourceApi.reducer,
+    },
+    middleware: (getDefaultMiddleware) =>
+      getDefaultMiddleware()
+        // ...existing middlewares...
+        .concat(newResourceApi.middleware),
+  });
+
+════════════════════════════════════════════════════════════════
+REQUIRED FILE 4 — src/pages/<resource>/<Resource>Page.tsx
+════════════════════════════════════════════════════════════════
+- Create one page component per new BE controller
+- Create one visible panel (card) per BE endpoint
+- Use the RTK Query hooks generated from the slice
+- Handle all three states for queries: loading (isFetching), error (isError), success (data)
+- Handle all three states for mutations: loading (isLoading), error (catch), success (result)
+- Show a success message after every successful mutation
+- Show a visible error message after every failed call
+- Each panel is a form (<form onSubmit={...}>) where inputs map 1:1 to request fields
+- Export the page as a named export: export function ResourcePage()
+
+Structure template:
+  import { useState } from 'react';
+  import type { FormEvent } from 'react';
+  import { useGetXxxQuery, useCreateXxxMutation } from '../../api/services/xxx.api';
+  import './XxxPage.css';
+
+  export function XxxPage() {
+    // state for each form
+    // hooks for each endpoint
+    // handlers
+    return (
+      <div className="xxx-page">
+        <header className="page-header">
+          <h1 className="page-title">XXX MANAGEMENT</h1>
+          <span className="page-role">ROLE LABEL</span>
+        </header>
+        <div className="grid">
+          {/* one .card per endpoint */}
+        </div>
+      </div>
+    );
+  }
+
+════════════════════════════════════════════════════════════════
+REQUIRED FILE 5 — src/pages/<resource>/<Resource>Page.css
+════════════════════════════════════════════════════════════════
+Use EXACTLY these class names (they carry the design system):
+  .xxx-page          — page wrapper, padding: 40px 48px
+  .page-header       — flex row, border-bottom: 2px solid #fff, margin-bottom: 40px
+  .page-title        — h1, font-size: 28px, letter-spacing: 8px, color: #fff
+  .page-role         — small badge, border: 1px solid #666, color: #aaa
+  .grid              — display: grid, grid-template-columns: 1fr 1fr, gap: 3px
+  .card              — background: #111, border: 2px solid #fff, padding: 28px
+  .card--wide        — grid-column: 1 / -1
+  .section-title     — font-size: 13px, letter-spacing: 5px, border-bottom: 1px solid #555
+  .form              — flex column, gap: 14px
+  .form__row         — flex row, gap: 12px
+  .form__cols        — grid, 2 columns
+  .field-label       — font-size: 10px, color: #aaa, letter-spacing: 2px
+  .input             — background: #1a1a1a, border: 2px solid #666, color: #fff, font: Courier New
+  .input:focus       — border-color: #fff
+  .select            — same as .input
+  .btn               — background: #fff, color: #000, font: Courier New, letter-spacing: 3px
+  .btn:hover         — background: #111, color: #fff (inverted)
+  .btn--danger       — background: #111, color: #fff, border: 2px solid #fff (inverted default)
+  .btn--danger:hover — background: #fff, color: #000
+  .msg               — font: Courier New, border-left: 3px solid, padding: 10px 14px
+  .msg--ok           — color: #fff, border-color: #fff, background: #222
+  .msg--error        — color: #ff6666, border-color: #ff4444, background: #220000
+  .result-table      — border: 2px solid #555, margin-top: 16px
+  .result-row        — flex, justify-content: space-between, padding: 12px 16px, border-bottom: 1px solid #333
+  .result-key        — font-size: 10px, color: #aaa, letter-spacing: 3px, uppercase
+  .badge             — font-size: 10px, border: 1px solid, padding: 4px 10px
+  .badge--ok         — color: #fff, border-color: #fff, background: #222
+  .badge--off        — color: #888, border-color: #555, background: #111
+
+Global design rules:
+  - Page background: #000
+  - Card background: #111
+  - All text: #fff primary, #aaa secondary
+  - Font everywhere: 'Courier New', Courier, monospace
+  - NO border-radius anywhere
+  - NO shadows
+  - Uppercase letter-spaced labels throughout
+
+════════════════════════════════════════════════════════════════
+REQUIRED CHANGE 6 — src/App.tsx  (UPDATE existing file)
+════════════════════════════════════════════════════════════════
+Add a new route inside the auth-guarded <Layout> block:
+
+  import { XxxPage } from './pages/xxx/XxxPage';
+  // inside <Route path="/" element={<RequireAuth><Layout /></RequireAuth>}>:
+  <Route path="xxx" element={<XxxPage />} />
+
+════════════════════════════════════════════════════════════════
+REQUIRED CHANGE 7 — src/components/layout/Layout.tsx  (UPDATE existing file)
+════════════════════════════════════════════════════════════════
+Add the new page to navItems so it appears in the sidebar:
+
+  const navItems = [
+    { to: '/users',  label: 'USERS'  },
+    { to: '/wallet', label: 'WALLET' },
+    { to: '/xxx',    label: 'XXX'    },   ← add this line
+  ];
+
+════════════════════════════════════════════════════════════════
+REQUIRED CHANGE 8 — package.json  (if new dependencies needed)
+════════════════════════════════════════════════════════════════
+- zod must be in "dependencies" (not "devDependencies") if any types file uses it
+- Include the shell command to install: npm install zod
+- Include the updated package-lock.json in the PR
+
+════════════════════════════════════════════════════════════════
+MISTAKES YOU MUST NEVER MAKE
+════════════════════════════════════════════════════════════════
+✗ Declaring fetchBaseQuery locally inside a slice file
+  → Always import baseQueryWithAuth from '../config'
+
+✗ Generating only the API slice without a page, route, or nav link
+  → Every new controller = new page + new route + new nav item
+
+✗ Adding a slice but not updating src/store/index.ts
+  → The API will silently not work; always update the store
+
+✗ Using "import { SomeType }" for a type
+  → Always use "import type { SomeType }" (verbatimModuleSyntax)
+
+✗ Writing providesTags: ['Tag'] without declaring tagTypes: ['Tag'] in createApi
+  → TypeScript error; always declare tagTypes first
+
+✗ Importing from a file that does not exist yet
+  → Create every referenced file in the same PR
+
+✗ Using zod without adding it to package.json dependencies
+  → Add zod to dependencies and provide npm install command
+
+✗ Mapping Java BigDecimal to number
+  → Always map to string (JSON serialises BigDecimal as numeric string)
+
+✗ Mapping Java LocalDate / LocalDateTime to Date object
+  → Always map to string ("YYYY-MM-DD" / ISO 8601)
+
+✗ Leaving page unreachable (no route, no nav item)
+  → Always add BOTH the Route in App.tsx AND the entry in Layout.tsx navItems
+
+✗ Creating config.ts again or changing its content
+  → It already exists; only import from it
+
+════════════════════════════════════════════════════════════════
+SELF-CHECK BEFORE OUTPUTTING THE PR
+════════════════════════════════════════════════════════════════
+Go through this checklist for every new BE controller you find:
+
+  [ ] src/api/types/<resource>.types.ts created
+        - Zod schema for every response DTO
+        - Interface for every request DTO
+        - All type imports use "import type"
+
+  [ ] src/api/services/<resource>.api.ts created
+        - Uses baseQueryWithAuth from '../config'
+        - One endpoint per BE @GetMapping / @PostMapping / @PutMapping / @DeleteMapping
+        - tagTypes declared, providesTags on queries, invalidatesTags on mutations
+        - All hooks exported
+
+  [ ] src/store/index.ts updated
+        - New slice reducer added to reducer map
+        - New slice middleware added to middleware chain
+
+  [ ] src/pages/<resource>/<Resource>Page.tsx created
+        - One card/panel per endpoint
+        - Loading, error, success states handled
+        - Named export: export function <Resource>Page()
+
+  [ ] src/pages/<resource>/<Resource>Page.css created
+        - Uses the class names from the design system above
+
+  [ ] src/App.tsx updated
+        - New import for the page component
+        - New <Route path="<resource>" element={<ResourcePage />} />
+
+  [ ] src/components/layout/Layout.tsx updated
+        - New entry in navItems array
+
+  [ ] package.json / package-lock.json updated if new npm packages required
+
+Only output the PR when every checkbox above is ticked.
