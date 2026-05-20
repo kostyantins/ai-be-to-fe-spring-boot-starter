@@ -22,7 +22,8 @@ import org.springframework.scheduling.annotation.EnableAsync;
  * <p>All beans are created when {@code ai.fe-generator.enabled=true} (the default).
  * Set it to {@code false} to completely disable the starter without removing the dependency.</p>
  *
- * <p>Register in {@code META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports}.</p>
+ * <p>Activated by importing this configuration via {@link EnableAiFeGenerator}
+ * on the consumer application's {@code @SpringBootApplication} class.</p>
  */
 @AutoConfiguration
 @EnableAsync
